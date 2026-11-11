@@ -1,0 +1,74 @@
+# Windows ve Mac sürümlerini derler. "v" ile başlayan bir etiket (ör. v0.0.1) gönderildiğinde
+# derlenen dosyalar o etiketin GitHub sürümüne (Releases) eklenir. Actions sekmesinden elle de başlatılabilir.
+name: Derle
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  derle:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            ad: Windows
+          - os: macos-15
+            ad: Mac-AppleSilikon
+          - os: macos-15-intel
+            ad: Mac-Intel
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Kütüphaneleri kur
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Sınama
+        run: python -c "from turnusol import yerlesim, okuma, kaynaklar; print(len(yerlesim.yukle()), 'işaret tanındı')"
+
+      - name: Paketle
+        run: pyinstaller --noconfirm turnusol.spec
+
+      - name: Windows için sıkıştır
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/Turnusol -DestinationPath "Turnusol-${{ github.ref_name }}-${{ matrix.ad }}.zip"
+
+      - name: Mac için sıkıştır
+        if: runner.os == 'macOS'
+        run: |
+          codesign --force --deep --sign - dist/Turnusol.app
+          ditto -c -k --keepParent dist/Turnusol.app "Turnusol-${{ github.ref_name }}-${{ matrix.ad }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Turnusol-${{ matrix.ad }}
+          path: Turnusol-*.zip
+
+  yayinla:
+    needs: derle
+    if: always() && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: paketler
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: paketler/*.zip
+          fail_on_unmatched_files: false
