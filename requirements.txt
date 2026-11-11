@@ -1,0 +1,7 @@
+# Turnusol (turnusol paketi)
+numpy
+opencv-python-headless>=4.7
+openpyxl
+xlrd
+pypdfium2
+PySide6-Essentials
