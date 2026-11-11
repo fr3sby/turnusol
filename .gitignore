@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+build/
+dist/
+.DS_Store
+# Gerçek sınav verileri depoya konmaz
+*.XLS
+*.xls
+tarama*.pdf
