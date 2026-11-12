@@ -5,24 +5,27 @@ from PySide6.QtCore import Qt, QUrl, QMarginsF, QRect
 from PySide6.QtGui import QPixmap, QImage, QPainter, QDesktopServices, QPageLayout, QPageSize
 from PySide6.QtPrintSupport import QPrinter, QPrintDialog
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-                               QFileDialog, QMessageBox, QFrame)
+                               QFileDialog, QMessageBox, QFrame, QScrollArea, QWidget, QSizePolicy)
 
 from ..kaynaklar import FORMLAR, form_yolu, SABLON
 from .ortak import etiket, dugme, Bildirim
 
 
 def _sayfa_goruntusu(yol, dpi):
+    """PDF'nin ilk sayfasını gri tonlu QImage olarak döndürür (Pillow gerekmez)."""
+    import numpy as np
+    from .. import girdi
     import pypdfium2 as pdfium
     pdf = pdfium.PdfDocument(yol)
     try:
-        return pdf[0].render(scale=dpi / 72, grayscale=True).to_pil().convert('L')
+        s = pdf[0]
+        arr = girdi._gri(s.render(scale=dpi / 72, grayscale=True).to_numpy().copy())
+        s.close()
     finally:
         pdf.close()
-
-
-def _qimage(pil):
-    im = QImage(pil.tobytes(), pil.width, pil.height, pil.width, QImage.Format_Grayscale8)
-    return im.copy()
+    arr = np.ascontiguousarray(arr, dtype=np.uint8)
+    h, w = arr.shape
+    return QImage(arr.data, w, h, arr.strides[0], QImage.Format_Grayscale8).copy()
 
 
 def sablonu_kaydet(ust):
@@ -46,14 +49,17 @@ def sablonu_kaydet(ust):
 class FormlarPenceresi(QDialog):
     def __init__(self, ust=None):
         super().__init__(ust)
-        self.setWindowTitle('Boş optik formlar'); self.resize(980, 760)
-        lay = QHBoxLayout(self); lay.setContentsMargins(24, 24, 24, 24); lay.setSpacing(24)
+        self.setWindowTitle('Boş optik formlar'); self.resize(1100, 820); self.setMinimumSize(900, 640)
+        lay = QHBoxLayout(self); lay.setContentsMargins(0, 0, 24, 0); lay.setSpacing(16)
 
-        sol = QVBoxLayout(); sol.setSpacing(12)
+        # sol sütun kaydırılabilir bir alanda durur; pencere küçülünce öğeler üst üste binmez
+        panel = QWidget(); sol = QVBoxLayout(panel); sol.setContentsMargins(24, 24, 8, 24); sol.setSpacing(12)
         sol.addWidget(etiket('Boş optik formlar', 'baslik'))
         sol.addWidget(etiket('Kullanmak istediğiniz formu seçin. Formu doğrudan yazdırabilir ya da PDF olarak kaydedip '
                              'fotokopiyle çoğaltabilirsiniz.', 'yardim', True))
-        self.liste = QListWidget(); self.liste.setMinimumWidth(300); self.liste.setMinimumHeight(8 * 41 + 4)
+        self.liste = QListWidget()
+        self.liste.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.liste.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         grup = None
         for dosya, g, baslik, aciklama in FORMLAR:
             if g != grup:
@@ -61,11 +67,11 @@ class FormlarPenceresi(QDialog):
                 f = it.font(); f.setBold(True); it.setFont(f); self.liste.addItem(it); grup = g
             it = QListWidgetItem('   ' + baslik); it.setData(Qt.UserRole, (dosya, aciklama)); self.liste.addItem(it)
         self.liste.currentItemChanged.connect(self._sec)
-        sol.addWidget(self.liste, 1)
-        self.aciklama = etiket('', 'yardim', True); sol.addWidget(self.aciklama)
+        sol.addWidget(self.liste)
+        self.aciklama = etiket('', 'yardim', True); self.aciklama.setMinimumHeight(36)
+        sol.addWidget(self.aciklama)
         sol.addWidget(Bildirim('uyari', '', 'PDF dosyasını başka bir programdan yazdırırken ölçeği <b>Gerçek boyut</b> ya da '
-                               '<b>%100</b> olarak seçin. Sayfaya sığdırma ayarı formu küçültür. Program küçültülmüş formları da '
-                               'çoğu zaman okur, ancak gerçek boyutta basılan formlar en güvenilir sonucu verir.'))
+                               '<b>%100</b> olarak seçin. Sayfaya sığdırma ayarı formu küçültür.'))
         dug = QHBoxLayout(); dug.setSpacing(1)
         self.yazdir = dugme('Yazdır…', 'birincil'); self.yazdir.clicked.connect(self._yazdir)
         self.kaydet = dugme('PDF olarak kaydet…', 'ikincil'); self.kaydet.clicked.connect(self._kaydet)
@@ -75,12 +81,25 @@ class FormlarPenceresi(QDialog):
         sol.addWidget(ac, 0, Qt.AlignLeft)
         sab = dugme('Boş Excel öğrenci listesi şablonunu kaydet…', 'hayalet'); sab.clicked.connect(lambda: sablonu_kaydet(self))
         sol.addWidget(sab, 0, Qt.AlignLeft)
-        lay.addLayout(sol, 2)
+        sol.addStretch(1)
+        alan = QScrollArea(); alan.setWidget(panel); alan.setWidgetResizable(True); alan.setFrameShape(QFrame.NoFrame)
+        alan.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        alan.setFixedWidth(430)
+        lay.addWidget(alan)
 
-        self.onizleme = QLabel(); self.onizleme.setAlignment(Qt.AlignCenter); self.onizleme.setMinimumWidth(480)
+        self.onizleme = QLabel(); self.onizleme.setAlignment(Qt.AlignCenter)
+        self.onizleme.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         self.onizleme.setStyleSheet('background:#e0e0e0;')
-        lay.addWidget(self.onizleme, 3)
+        sag = QVBoxLayout(); sag.setContentsMargins(0, 24, 0, 24); sag.addWidget(self.onizleme)
+        lay.addLayout(sag, 1)
         self.liste.setCurrentRow(1)
+
+    def _liste_yuksekligi(self):
+        h = sum(self.liste.sizeHintForRow(i) for i in range(self.liste.count()))
+        self.liste.setFixedHeight(h + 2 * self.liste.frameWidth() + 2)
+
+    def showEvent(self, e):
+        super().showEvent(e); self._liste_yuksekligi(); self._goster()
 
     def _secili(self):
         it = self.liste.currentItem()
@@ -100,9 +119,14 @@ class FormlarPenceresi(QDialog):
         s = self._secili()
         if not s:
             return
-        im = _qimage(_sayfa_goruntusu(form_yolu(s[0]), 90))
-        pm = QPixmap.fromImage(im).scaled(self.onizleme.width() - 24, self.onizleme.height() - 24,
-                                          Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        w, h = self.onizleme.width() - 32, self.onizleme.height() - 32
+        if w < 50 or h < 50:
+            return
+        if getattr(self, '_onbellek', (None,))[0] != s[0]:
+            self._onbellek = (s[0], QPixmap.fromImage(_sayfa_goruntusu(form_yolu(s[0]), 150)))
+        dpr = self.devicePixelRatioF()
+        pm = self._onbellek[1].scaled(int(w * dpr), int(h * dpr), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        pm.setDevicePixelRatio(dpr)
         self.onizleme.setPixmap(pm)
 
     def resizeEvent(self, e):
@@ -135,12 +159,28 @@ class FormlarPenceresi(QDialog):
         d = QPrintDialog(yazici, self); d.setWindowTitle('Formu yazdır')
         if d.exec() != QDialog.Accepted:
             return
-        dpi = min(yazici.resolution(), 600)
-        img = _qimage(_sayfa_goruntusu(form_yolu(dosya), dpi))
-        p = QPainter()
-        if not p.begin(yazici):
-            QMessageBox.warning(self, 'Yazdırılamadı', 'Yazıcı başlatılamadı. Formu PDF olarak kaydedip başka bir programdan yazdırmayı deneyin.')
-            return
-        hedef = yazici.paperRect(QPrinter.DevicePixel).toRect()
-        p.drawImage(QRect(0, 0, hedef.width(), hedef.height()), img)
+        try:
+            bas(yazici, form_yolu(dosya))
+        except Exception as e:
+            QMessageBox.warning(self, 'Yazdırılamadı',
+                                f'Form yazıcıya gönderilemedi. Sistem şu hatayı verdi: {e}\n\n'
+                                'Formu PDF olarak kaydedip başka bir programdan yazdırmayı deneyin.')
+
+
+def bas(yazici, yol):
+    """PDF'nin ilk sayfasını yazıcıya gerçek boyutta basar. Yazıcı çoklu kopyayı kendisi yapamıyorsa kopyaları tek tek gönderir."""
+    yazici.setFullPage(True)
+    dpi = max(150, min(yazici.resolution(), 600))
+    img = _sayfa_goruntusu(yol, dpi)
+    kopya = 1 if yazici.supportsMultipleCopies() else max(1, yazici.copyCount())
+    p = QPainter()
+    if not p.begin(yazici):
+        raise RuntimeError('Yazıcı başlatılamadı.')
+    try:
+        for i in range(kopya):
+            if i:
+                yazici.newPage()
+            hedef = yazici.paperRect(QPrinter.DevicePixel).toRect()
+            p.drawImage(QRect(0, 0, hedef.width(), hedef.height()), img)
+    finally:
         p.end()
